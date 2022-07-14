@@ -1,0 +1,304 @@
+---
+title: "Statistica Bayesiana"
+author: "Pietro Lesci"
+date: "`r Sys.Date()`"
+output:  
+ html_document:
+   toc: true
+   toc_depth: 3
+   toc_float: true
+   number_sections: true
+   theme: paper
+   highlight: kate
+   code_folding: show
+---
+
+<style>
+body {
+text-align: justify}
+body{ /* Normal  */
+      font-size: 18px;
+      font-family: serif;
+  }
+.math {
+  font-size: 17px;
+}
+code.r{
+  font-size: 15px;
+}
+</style>
+
+```{r, warning=FALSE, message=FALSE, echo}
+require(knitr)
+require(tidyverse)
+require(MASS)
+require(BayesVarSel)
+require(kableExtra)
+require(BoomSpikeSlab)
+```
+
+
+
+#Introduction
+
+In this notebook I will analyse the build-in dataset `UScrime`  in order to perform Bayesian variable selection using the three different methods to assign parameters priors discussed in the main paper. This data-set is available from **R**-package `MASS` [Venables and Ripley (2002)]. It has a total of $n = 47$ observations (corresponding to states in the US) of $p = 15$ potential covariates aimed at explaining the rate of crimes in a particular category per head of population (labelled $y$ in the data).
+
+
+|  Name 	| *Description*  	|
+|---	|---	|
+|  **M** 	|  Percentage of males aged 14-24 	|
+|  **So**  	|   Indicator variable for a Southern state	|
+| **Ed**  	|   Mean years of schooling	|
+| **Po1**  	|   Police expenditure in 1960	|
+|  **Po2** 	|  Police expenditure in 1959 	|
+|  **LF** 	| Labour force participation rate |
+| **M.F**  	| Number of males per 1000 females 	|
+|  **Pop** 	|State population|
+|  **NW** 	|  Number of non-whites per 1000 people 	|
+|  **U1** 	|  Unemployment rate of urban males 14-24 	|
+|**U2**   	| Unemployment rate of urban males 35-39  	|
+| **GDP**| Gross domestic product per head|
+|**Ineq**|Income inequality|
+|**Prob**|Probability of imprisonment|
+|**Time**|Average time served in state prisons|
+|**y**|Rate of crimes in a particular category per head of population|
+Table: Variables description    
+
+Take a look at the dataset:
+
+```{r}
+kable(head(UScrime), "html") %>% 
+     kable_styling(font_size = 5)
+```
+
+
+#Objective priors
+In this section we present the package `BayesVarSel` [Garcia-Donato and Forte(2016)] that easely lets implement the procedure using the objective priors analysed in section *VI.i* of the main paper. 
+
+`BayesVarSel` provides three different functions for variable selection
+
+- `Bvs` performs exhaustive enumeration of hypotheses and hence the size of problems must be small or moderate (say $p \leqslant 25$)
+- `PBvs` is a parallelized version of Bvs making it possible to solve moderate problems (roughly the same size as above) in less time with the help of several cpu's
+- `GibbsBvs` simulations from the the posterior distribution over the model space using a Gibbs sampling scheme (intended to be used for large problems, with $p \geqslant 25$)
+
+##Output
+These three functions return objects of class **Bvs** which are a list with
+relevant information about the posterior distribution. For these objects `BayesVarSel` provides a number of functions, based on the tradition of model selection methods, to summarize the corresponding posterior distribution (eg. what is the hypothesis most probable a posteriori).
+
+##Arguments
+The customary arguments in `Bvs`, `PBvs` and `GibbsBvs` are 
+
+- `data`: (a `data.frame` with the data) 
+
+- `formula`: takes the definition of the most complex model considered, i.e. the *full* model. The default execution setting corresponds to a problem where the *null* model contains just the intercept, i.e. $X_0 = \mathbf{1}_n)$. If one want to change the null model, she can achieve this using the optional input `fixed.cov`, a character vector with the names of the covariates included in the null model. Notice that, by definition, the variables in the null model are part of any of the entertained models including of course the full model. A case sensitive convention here is to use the word **"Intercept"** to stand for the name of the intercept so the default corresponds to `fixed.cov=c("Intercept")`. A null model that just contains the error term (that is, $X_0$ equal to the null matrix) is specified as `fixed.cov=NULL`
+
+- `prior.models`: regulates the assignment of priors probabilities, $p(H_\gamma)$, which by default takes the value **"ScottBerger"** that corresponds to $p(M_\gamma|\omega) = \omega^{p_\gamma}(1-\omega)^{p-p_\gamma}$, $\omega \sim Unif(0,1)$ 
+Other options for this argument are **Constant**, which stands for $p(M_\gamma) = 1/2^p$ and the more flexible value, **User**, under which the user must specify the prior probabilities with the extra argument `priorprobs`
+
+- `prior.betas`: regulates the asignment of priors probabilities $p_\gamma(g)$ for the hyperparameter $g$ of the distribution of the $\beta_j$'s. Let's recall it $$p_\gamma^R(\zeta, \beta_\gamma, \sigma) \; = \; p(\zeta,\sigma) \;\; p_\gamma^R(\beta_\gamma|\zeta,\sigma)
+    \; = \; \sigma^{-1} \; \int_0^\infty \mathcal{N}_{p_\gamma}\left(0, g\;\Sigma_\gamma\right) \;p_\gamma^R(g)\;dg$$
+where $\Sigma_\gamma \; = \;  cov(\hat{\beta}_\gamma)\; = \; \sigma^2\left(V_\gamma'V_\gamma\right)^{-1}$ with $V_\gamma \; = \; (I_n - \mathbf{1}_n(\mathbf{1}_n'\mathbf{1}_n)^{-1}\mathbf{1}_n)X_\gamma$ and where 
+$$g\sim p_\gamma^R(g)$$
+The available options to specify this latter distribution are: 
+     - **"ZellnerSiow"**: returns the Cauchy prior, $g \sim in-ga(1/2, n/2)$ 
+     - **"gZellner"**: returns the Unit Information prior, $g = n$
+     - **"FLS"**: returns the Benchmark prior, $g = \max\{n, p^2\}$.
+     - **"Liangetal"**: returns the Robust prior, $g \sim p(g) \propto (1 + g/n)^{-3/2}$
+
+and for the null model the prior assumed is  $p_0(\zeta, \sigma) \; = \; \sigma^{-1}$
+
+
+
+
+- `time.test`: if it is set to **TRUE** and the problem is of moderate size ($p \geq 18$) an estimation of computational time is calculated and the user is asked about the possibility of not executing the command.
+
+- `n.keep`: this is specific for `Bvs`. This algorithm implemented is exact in the sense that the information collected about the posterior distribution takes into account all competing models as these are all computed. Nevertheless, to save computational time and memory it is quite appropriate to keep only a moderate number of the best (most probable a posteriori) models. This number can be specified with this argument which must be an integer number between 1 (only the most probable model is kept) and $2^p$ (a full ordering of models is kept). The default value is 10.
+
+- `n.nodes`: this is specific for `PBvs` and conveniently distributes several `Bvs` among the number of available cores specified in the argument. In `PBvs` is  still possible to declare `n.keep` explained above.
+
+Specific arguments must be declared when using `GibbsBvs`: the algorithm samples models from the posterior over the model space and this is done using a simple (yet very efficient) Gibbs sampling scheme introduced in [George and McCulloch (1997)]. The type of default arguments that can be specified in  are the typical in any Monte Carlo Markov Chain scheme (as usual the default values are given in the assignment)
+
+- `init.model`: the model at which the simulation process starts. Options include **Null** (the model only with the covariates specified in `fixed.cov`), **Full** (the model defined by formula), **Random** (a randomly selected model) and a **vector** with $p$ zeros and ones defining a model (the old faithfull $\gamma$)
+
+- `n.burnin`: indicates the length of burn in, i.e. the number of iterations to discard at the start of the simulation process. Default set is 50
+
+- `n.iter`: declares the total number of iterations performed after the burn in process. Deafault set is 10000
+
+- `n.thin`: declares the thinning rate of the chain that must be a positive integer. Default is 1 to save memory and computation time if `n.iter` is large
+
+- `seed`: a seed to initialize the random number generator
+
+Notice that the number of total iterations is `n.burnin`$+$`n.iter` but the
+number of models that are used to collect information from the posterior is, approximately, `n.iter`$/$`n.thin`.
+
+##Summaries of posteriors
+Here we describe the methods to explore the content of objects of class **Bvs** resulting from the application of the above functions.
+
+Printing a **Bvs** object created with `Bvs` or `PBvs` shows the best 10 models with their associated probability. If the object was built with `GibbsBvs` then what is printed is the most probable model among the sampled ones. If the object was obtained with either `Bvs` and `PBvs` the given measures here explained are *exact*. If instead `GibbsBvs` was used, the reported measures are *approximations* of the exact ones; these approximations are based on the frequency of visits as an estimator of the real $p(M_\gamma | y)$.
+When an object of class **Bvs** is summarized via the function `summary` the *Highest Posterior Probability model*, **HPM** jointly with the inclusion probabilities, **Incl.prob.** for each competing variable in the data-set, $p(x_j | y)$ are returned. The latter are the sum of the posterior probabilities of models containing that covariate and provide evidence about the individual importance of each explanatory variable. 
+The model defined by those variables with an inclusion probability greater than 0.5 is called a *Median Probability Model*, **MPM**, which is also included in the summary. [Barbieri and Berger (2004)] show that, under general conditions, if a single model has to be utilized with predictive purposes, the **MPM** is optimal.
+
+The main graphical support is contained in the function `plot` which depends on `x` (an object of class **Bvs**) and the argument `option` which specified the type of plot to be produced:
+
+- **"joint"** produces a matrix plot with the joint inclusion probabilities, $p(x_h, x_j | y)$ (marginal inclusion probabilities in the diagonal)
+
+- **"conditional"** produces a matrix plot with the conditional inclusion probabilities $p(x_j | x_h, y)$ (ones in the diagonal)
+
+- **"not"** produces a matrix plot with the conditional inclusion probabilities $p(x_j |\; \text{Not}\; x_h, y)$ (zeroes in the diagonal)
+
+- **"dimension"** produces a bar plot representation of the posterior distribution of the dimension of the true model (number of variables, ranging from $p_0$ to $p_0 + p$)
+
+The first three options above are basic measures describing aspects of the
+joint effect of two given variables, $x_j$, $x_h$ and can be understood as natural extensions of the marginal inclusion probabilities. 
+
+##Example: objective priors
+I assume that the *null* model contains the intercept only and, since $p<25$ I use the command `Bvs` which returns information on all competing models. I store the result of the analysis into an object that I label **crime**. The model prior $p(M_\gamma|\omega)$ is the one mentioned above with $p(\omega) = Unif(0,1)$. The prior on the $g$ is the Unit Information prior. I specify that only the 10 most probable models should be kept.
+
+
+```{r}
+crime <- Bvs(formula = "y~.", 
+             data = UScrime,
+             prior.models = "ScottBerger",
+             prior.betas = "gZellner",
+             n.keep = 10)
+```
+
+The object **crime** has been created and it is a list of 14 elements. Let's investigate it
+```{r}
+crime
+```
+The print shows the 10 most probable models, suggesting that the variable to be included are, in addition to the incercept that is assumed to be included in every model, **Ed**, **Po1**,**Ineq**. With the function `summary` we can explore the inclusion probability of the competing covariates further
+```{r}
+summary(crime)
+```
+The output clearly shows that, with the priors specified above, the most important variables that have higher probability to be indeed important for our analysis are the same found above. Less influential but of certain importance are **M** and **Prob**.
+
+Graphically, it is possible to assess the posterior probabilities of the dimesion of the model. Here, $p=6$ has the highest posterior probability to be the actual number of useful covariates.
+```{r, fig.align='center', fig.height=5.5, fig.height=3.2}
+plot(crime, option = "dimension")
+```
+
+#Spike and slab priors
+
+##Prior specification
+In order to implement stochastic search variable selection in **R**, I use the package `BoomSpikeSlab` that lets easely implement spike and slab variable selection à la George and McCulloch (1997).
+In order to use the main function `lm.spike` it is needed to define the prior distribution on $\beta$. To do so the function `SpikeSlabPrior` has been created. Its inputs are:
+
+- `x`: the design matrix for the regression problem
+
+- `y`: the vector of responses for the regression
+
+- `expected.r2`: the expected R-square for the regression. The spike and slab prior requires an inverse gamma prior on the residual variance of the regression.  The prior can be parameterized in terms of a guess at the residual variance, and a "degrees of freedom" representing the number of observations that the guess should weigh. The guess at $\sigma^2$ is set to
+$(1-\texttt{expected.r2}) \text{var}(y)$
+
+- `prior.df`: a positive scalar representing the prior 'degrees of freedom' for estimating the residual varianc e. This can be thought of as the amount of weight (expressed as an observation count) given to the `expected.r2` argument
+
+- `expected.model.size`: a positive number less than the number of covariates representing a guess at the number of significant predictor variables.  Used to obtain the spike portion of the spike and slab prior
+
+- `prior.information.weight`: a positive scalar representing the number of observations worth of weight that should be given to the prior estimate of $\beta$
+
+- `diagonal.shrinkage`: the conditionally Gaussian prior for $\beta$ (the  "slab") starts with a precision matrix equal to the information in a single observation. However, this matrix might not be full rank. The matrix can be made full rank by averaging with its diagonal. `diagonal.shrinkage` is the weight given to the diagonal in this average. Setting this to zero gives Zellner's g-prior
+
+- `optional.coefficient.estimate`: if desired, an estimate of the regression coefficients can be supplied. In most cases this will be a difficult parameter to specify. If omitted then a prior mean of zero will be used for all coordinates except the intercept, which will be set to `mean(y)`. 
+- `max.flips`: the maximum number of variable inclusion indicators the sampler will attempt to sample each iteration. If $\texttt{max.flips} \leq 0$ then all indicators will be sampled. 
+
+- `prior.inclusion.probabilities`: a vector giving the prior probability of inclusion for each variable
+
+- `sigma.upper.limit`: the largest acceptable value for the residual standard deviation. A non-positive number is interpreted as $\texttt{Inf}$
+
+
+The output is a list whose elements feeds in the `lm.spike` function.
+
+
+##Posterior evaluation
+
+The entire job is done by the function `lm.spike`. It is an MCMC algorithm  that places some amount of posterior probability at zero for a subset of the regression coefficients. Its input are
+
+- `formula`: with all variables included, as in the previous package but without quotation marks
+
+- `niter`: the number of MCMC iterations to run.  Here we muste sure to include enough so we can safely throw away a burn-in set
+
+- `data`: (optional) the data frame, list or environment contatining the data 
+- `subset`: (optional) vector specifying a subset of observations to be used in the fitting process
+
+- `prior`: (optional) list returned by `SpikeSlabPrior`, if missing a default
+prior will be used
+
+- `error.distribution`: specify either **Gaussian** or **Student-t** errors. If the error distribution is student then the prior must be create3 with the function `StudentSpikeSlabPrior`
+
+- `bma.method`: the MCMC method to use. **SSVS** is the stochastic search variable selection algorithm  from  George  and  McCulloch  (1997); **ODA**  is  the  orthogonal  data augmentation method from Clyde and Ghosh (2011)
+
+- `ping`: the frequency with which to print status update messages to the screen. For example, if ping == 10 then an update will be printed every 10 MCMC iterations
+
+- `seed`: an integer to use as the random seed for the underlying C++ code. If NULL then the seed will be set using the clock
+
+While the output is an object of class `lm.spike`, which is a list with the following elements
+
+- `beta`: a `niter`$\times$ `ncol(x)` matrix of regression coefficients, many of which may be zero. Each row corresponds to an MCMC iteration
+
+- `sigma`: a vector of length `niter` containing the MCMC draws of the residual standard deviation parameter
+
+- `prior`: the prior used to fit the model.  If a prior was supplied as an argument it will be returned.  Otherwise this will be the automatically generated prior based on the other function arguments
+
+The output is an object of class `lm.spike` which is a list with the following elements
+
+- `beta`: a $\texttt{niter} \times \texttt{ncol(x)}$ matrix of regression coefficients, many of which may be zero. Each row corresponds to an MCMC iteration 
+
+- `sigma`: a vector of lenght $\texttt{niter}$ containing the MCMC draws of the residual standard deviation parameter
+
+- `prior`: the prior used to fit the model
+
+##Example: spike and slab priors
+
+Firstly it is necessary to define the prior to be used. I specify two priors: one which assumes independent coefficient and one which assumes dependent coefficients.
+
+```{r, results='hide'}
+x <-as.matrix(bind_cols(UScrime[,-16])) #design matrix
+y <- UScrime[,16]                       #responses
+
+prior_ind <- IndependentSpikeSlabPrior(x,
+               y = y,
+               expected.r2 = .5,
+               prior.df = .01,
+               expected.model.size = 6, #from the previous example
+               optional.coefficient.estimate = NULL,
+               prior.inclusion.probabilities = NULL, 
+               sigma.upper.limit = Inf);
+
+prior_dep <- SpikeSlabPrior(x,
+               y = y,
+               expected.r2 = .5,
+               prior.df = .01,
+               expected.model.size = 6, #from the previous example
+               prior.information.weight = .01, #weak support to prior belief
+               diagonal.shrinkage = 0, #use the Zellner's g-prior
+               optional.coefficient.estimate = NULL,
+               max.flips = -1,
+               mean.y = mean(y, na.rm = TRUE),
+               sdy = sd(as.numeric(y), na.rm = TRUE),
+               prior.inclusion.probabilities = NULL, #model's prior
+               sigma.upper.limit = Inf);
+```
+```{r, results='hide', message=FALSE, warning=FALSE}
+niter<-10000
+burn <- 1/10*niter
+model_ind <- lm.spike(y ~ x, niter=niter);
+model_dep <- lm.spike(y ~ x, niter=niter);
+```
+
+Now that we have the objects for both the models, let's explore them. Firstly I plot the posterior inclusion for both model. As it is possibile to see, the results change substantially from the previous section: `Po1` and `Po2` are the most likely regressor to be included, while `Ed` has lost its importance.
+```{r}
+par(mfrow = c(1,2))
+plot(model_ind)
+plot(model_dep)
+```
+
+Secondly, I plot, for both model, the posterior model size distribution, that, as in the previous section, suggests that the number of covariates to be included is 5-6.
+
+```{r}
+par(mfrow = c(1,2))
+PlotModelSize(model_ind$beta, burn = burn, xlab= "Number of nonzero coefficients (ind)")
+PlotModelSize(model_dep$beta, burn = burn, xlab= "Number of nonzero coefficients(dep)")
+```
+
+
